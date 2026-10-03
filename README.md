@@ -41,6 +41,7 @@ The app can stay in "Testing" mode forever. You're its only user.
 ## Good to know
 
 - **Sign-in lasts an hour.** After that a yellow **Tap to sync** button appears at the top. Anything you log meanwhile is kept on the phone and goes up on the next sync.
+- **Local storage** is shared between Chrome and the installed app, and Kasa asks Chrome to protect it from automatic cleanup. Clearing Chrome's site data still wipes it, and Drive brings it back.
 - **Two devices** can edit at the same time. Kasa merges both sets of changes, including deletions.
 - **Exchange rates** come from open.er-api.com, once a day. Editing a rate by hand switches automatic updates off. Turn them back on in Settings.
 - **Updating the app:** after you change files, raise `VERSION` in `sw.js` (for example to `kasa-v2`) so phones pick up the new version.

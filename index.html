@@ -69,6 +69,8 @@ button{cursor:pointer;border:0;background:none;padding:0}
 .alts span small{font-size:13px;font-weight:500;opacity:.75;margin-left:4px}
 .strip{display:flex;height:12px;border-radius:4px;overflow:hidden;margin:16px 0 12px;background:rgba(255,255,255,.12);gap:2px}
 .strip i{display:block;height:100%}
+.upcoming{font-size:14px;opacity:.8;margin-top:6px}
+.rep-mark{font-size:12px;opacity:.7;margin-left:4px}
 .board-foot{display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:14px}
 .board-foot b{display:block;font-size:17px;font-weight:700}
 .ticket-edge{position:absolute;right:-1px;top:0;bottom:0;width:10px;background:
@@ -213,6 +215,7 @@ textarea.backup{width:100%;height:160px;font-size:12px;border-radius:10px;border
     <div class="board-label" id="boardLabel">Spent this month</div>
     <div class="big" id="bigTotal">0</div>
     <div class="alts" id="altTotals"></div>
+    <div class="upcoming hidden" id="upcoming"></div>
     <div style="height:14px"></div>
     <div class="board-foot">
       <div><span style="opacity:.75">Per day</span><b id="perDay">0</b></div>
@@ -253,7 +256,8 @@ textarea.backup{width:100%;height:160px;font-size:12px;border-radius:10px;border
     </div>
     <div class="fields">
       <label class="field"><span>Date</span><input type="date" id="fDate"></label>
-      <label class="field"><span>Note (optional)</span><input type="text" id="fNote" placeholder="Lidl, lunch…" maxlength="120"></label>
+      <label class="field" id="repeatField"><span>Repeat</span><select id="fRepeat"><option value="none">Doesn't repeat</option><option value="monthly">Every month</option><option value="weekly">Every week</option><option value="yearly">Every year</option></select></label>
+      <label class="field wide"><span>Note (optional)</span><input type="text" id="fNote" placeholder="Lidl, lunch, Netflix…" maxlength="120"></label>
     </div>
     <div class="recents" id="recents"></div>
     <p class="hint" id="hint"></p>
@@ -294,7 +298,7 @@ const PALETTE=["#E07A5F","#3D85C6","#E9B10A","#6A4C93","#2A9D8F","#E76F51","#7FA
 const DEFAULT_RATES={CZK:1,EUR:24.26,USD:21.01,UAH:0.468,PLN:5.64,GBP:28.42};
 const uid8=()=> (crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2)).replace(/-/g,"").slice(0,12);
 const defaults=()=>({
-  main:"UAH", alsoShow:["CZK","EUR"],
+  main:"UAH", alsoShow:["CZK","EUR"], recurring:[],
   rates:{...DEFAULT_RATES}, ratesAsOf:"2026-10-02", autoRates:true,
   accounts:[{id:"amex",name:"Amex",cur:"CZK"},{id:"cash",name:"Cash",cur:"CZK"}],
   categories:[
@@ -324,7 +328,7 @@ function lsLoad(){const o=lsGet(LS_KEY,null);if(!o)return;if(o.settings)S.settin
 function lsSave(){lsSet(LS_KEY,{settings:S.settings,months:S.months});}
 function normSettings(s){const d=defaults();const o={...d,...s};o.rates={...DEFAULT_RATES,...(s.rates||{})};o.rates.CZK=1;
   if(!Array.isArray(o.categories)||!o.categories.length)o.categories=d.categories;
-  if(!Array.isArray(o.alsoShow))o.alsoShow=d.alsoShow; if(!o.rates[o.main])o.main="CZK"; o.alsoShow=o.alsoShow.filter(c=>o.rates[c]&&c!==o.main).slice(0,2); return o;}
+  if(!Array.isArray(o.alsoShow))o.alsoShow=d.alsoShow; if(!Array.isArray(o.recurring))o.recurring=[]; if(!o.rates[o.main])o.main="CZK"; o.alsoShow=o.alsoShow.filter(c=>o.rates[c]&&c!==o.main).slice(0,2); return o;}
 const clone=o=>JSON.parse(JSON.stringify(o||{}));
 
 /* ---------- persistence: local first, Google Drive sync ---------- */
@@ -358,12 +362,12 @@ async function writeFile(id,name,mime,body){
   const b="kasa"+Math.random().toString(36).slice(2);
   const multi=`--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({name,mimeType:mime})}\r\n--${b}\r\nContent-Type: ${mime}\r\n\r\n${body}\r\n--${b}--`;
   const r=await gapi("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",{method:"POST",headers:{"Content-Type":`multipart/related; boundary=${b}`},body:multi});return (await r.json()).id;}
-const CSV_HEAD=["id","date","category","amount","currency","note","category_id","updated"];
+const CSV_HEAD=["id","date","category","amount","currency","note","category_id","updated","recurring_id"];
 function toDriveCsv(map){const rows=Object.values(map).filter(t=>t.type==="exp").sort((a,b)=>a.date.localeCompare(b.date)||a.ts-b.ts);
-  return [CSV_HEAD.join(",")].concat(rows.map(t=>[t.id,t.date,catById(t.cat).name,t.amount,t.cur,t.note||"",t.cat,t.ts||0].map(csvCell).join(","))).join("\n");}
+  return [CSV_HEAD.join(",")].concat(rows.map(t=>[t.id,t.date,catById(t.cat).name,t.amount,t.cur,t.note||"",t.cat,t.ts||0,t.rule||""].map(csvCell).join(","))).join("\n");}
 function fromDriveCsv(text){const map={};const rows=parseCsv(text||"");if(rows.length<2)return map;const hd=rows[0].map(x=>x.trim().toLowerCase());const ix=n=>hd.indexOf(n);
   for(const r of rows.slice(1)){const id=r[ix("id")];const date=parseDate(r[ix("date")]||"");const amt=Math.abs(parseAmount(r[ix("amount")]||""));if(!id||!date||!(amt>0))continue;
-    map[id]={id,type:"exp",date,amount:Math.round(amt*100)/100,cur:(r[ix("currency")]||"CZK").trim().toUpperCase(),note:(r[ix("note")]||"").trim(),cat:(r[ix("category_id")]||"").trim()||catIdByName(r[ix("category")]),acc:"main",ts:Number(r[ix("updated")])||0};}
+    map[id]={id,type:"exp",date,amount:Math.round(amt*100)/100,cur:(r[ix("currency")]||"CZK").trim().toUpperCase(),note:(r[ix("note")]||"").trim(),cat:(r[ix("category_id")]||"").trim()||catIdByName(r[ix("category")]),acc:"main",ts:Number(r[ix("updated")])||0};const rid=ix("recurring_id")>=0?(r[ix("recurring_id")]||"").trim():"";if(rid)map[id].rule=rid;}
   return map;}
 function catIdByName(n){n=(n||"").trim();const c=S.settings.categories.find(x=>x.name.toLowerCase()===n.toLowerCase());if(c)return c.id;
   const g=EMOJI_GUESS.find(([re])=>re.test(n));const nc={id:uid8(),name:n||"Other",emoji:g?g[1]:"🏷️",color:PALETTE[S.settings.categories.length%PALETTE.length],type:"exp"};S.settings.categories.push(nc);return nc.id;}
@@ -400,7 +404,7 @@ async function sync(){
     if(json!==remoteJson)ids.json=await writeFile(ids.json,FILES.json,"application/json",json);
     lsSet("kasa:fileids",ids);
     setAllTxs(merged);lsSet(LS_BASE,{txs:merged,settings:sharedSettings(S.settings)});lsSave();
-    D.lastSync=new Date();render();
+    D.lastSync=new Date();if(runRecurring())scheduleSync();render();
     if(document.getElementById("settings").classList.contains("open")&&!(document.activeElement&&document.activeElement.closest("#setBody input")))renderSettings();
   }catch(e){console.error(e);D.err=e.message==="auth"?null:"Couldn't reach Google Drive. Your changes are kept on this phone.";}
   finally{D.syncing=false;updateSyncUi();if(D.again){D.again=false;setTimeout(sync,300);}}
@@ -414,7 +418,31 @@ function driveText(){if(!CFG.googleClientId)return "Drive sync is off. Add your 
   return D.lastSync?`Synced with Google Drive at ${D.lastSync.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}.`:"Connected to Google Drive.";}
 function setStatus(){document.getElementById("status").textContent=driveOn()?driveText():"Saved on this phone. Connect Google Drive in Settings to back it up.";}
 document.getElementById("syncBtn").onclick=()=>{if(tokenOk())sync();else signIn(false);};
-document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"){updateSyncUi();if(tokenOk())sync();}});
+document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"){if(runRecurring())render();updateSyncUi();if(tokenOk())sync();}});
+
+/* ---------- recurring ---------- */
+const FREQ={monthly:"every month",weekly:"every week",yearly:"every year"};
+const pad2=n=>String(n).padStart(2,"0");
+function occ(r,i){const[y,m,d]=r.start.split("-").map(Number);
+  if(r.freq==="weekly"){const dt=new Date(Date.UTC(y,m-1,d+7*i));return dt.toISOString().slice(0,10);}
+  const dt=new Date(Date.UTC(r.freq==="yearly"?y+i:y,r.freq==="yearly"?m-1:m-1+i,1));const Y=dt.getUTCFullYear(),M=dt.getUTCMonth();
+  const dim=new Date(Date.UTC(Y,M+1,0)).getUTCDate();return `${Y}-${pad2(M+1)}-${pad2(Math.min(r.day||d,dim))}`;}
+function nextOcc(r,after){for(let i=0;i<3000;i++){const d=occ(r,i);if(d>after)return d;}return null;}
+// Creates entries for every due date up to today. Ids are built from the rule and date,
+// so two phones generating the same payment produce the same entry, not a duplicate.
+function runRecurring(){const st=S.settings,today=todayStr();let added=0,changed=false;
+  for(const r of st.recurring||[]){for(let i=0;i<3000;i++){const d=occ(r,i);if(d>today)break;if(r.genUntil&&d<=r.genUntil)continue;
+      const id=`r-${r.id}-${d}`,key=d.slice(0,7),mo=(S.months[key]=S.months[key]||{});
+      if(!mo[id]){mo[id]={id,type:"exp",amount:r.amount,cur:r.cur,cat:r.cat,note:r.note||"",date:d,acc:"main",ts:Date.parse(d)||0,rule:r.id};added++;}
+      r.genUntil=d;changed=true;}}
+  if(changed){lsSave();scheduleSync();}return added;}
+function upcomingThisMonth(main){const today=todayStr();if(S.month!==today.slice(0,7))return 0;let sum=0;
+  for(const r of S.settings.recurring||[]){for(let i=0;i<3000;i++){const d=occ(r,i);if(d.slice(0,7)>S.month)break;if(d>today&&d.slice(0,7)===S.month)sum+=conv(r.amount,r.cur,main);}}return sum;}
+const ordinal=n=>n+(n%10===1&&n!==11?"st":n%10===2&&n!==12?"nd":n%10===3&&n!==13?"rd":"th");
+function ruleWhen(r){const[y,m,d]=r.start.split("-").map(Number);
+  if(r.freq==="weekly")return "every "+new Date(Date.UTC(y,m-1,d)).toLocaleDateString("en-GB",{weekday:"long",timeZone:"UTC"});
+  if(r.freq==="yearly")return "every year on "+new Date(Date.UTC(y,m-1,d)).toLocaleDateString("en-GB",{day:"numeric",month:"long",timeZone:"UTC"});
+  return `every month on the ${ordinal(r.day||d)}`;}
 
 /* ---------- exchange rates ---------- */
 async function refreshRates(force){const st=S.settings;if(st.autoRates===false&&!force)return;
@@ -449,6 +477,8 @@ function render(){
   document.getElementById("boardLabel").textContent=`Spent in ${monthName(S.month).split(" ")[0]}`;
   document.getElementById("bigTotal").innerHTML=`${fmt(spent,0)}<small>${esc(main)}</small>`;
   document.getElementById("altTotals").innerHTML=st.alsoShow.map(c=>`<span>${fmt(sumIn(exp,c),0)}<small>${esc(c)}</small></span>`).join("");
+  const up=upcomingThisMonth(main),upEl=document.getElementById("upcoming");upEl.classList.toggle("hidden",!(up>0));
+  if(up>0)upEl.textContent=`Plus ${fmt(up,0)} ${main} in repeating payments still due this month`;
   const today=todayStr(),[y,m]=S.month.split("-").map(Number),dim=new Date(y,m,0).getDate();
   const days=S.month===today.slice(0,7)?Number(today.slice(8)):(S.month>today.slice(0,7)?0:dim);
   document.getElementById("perDay").textContent=days?`${fmt(spent/days,0)} ${main}`:"–";
@@ -500,7 +530,7 @@ function txRow(t){const c=catById(t.cat),main=S.settings.main;
   const sub=S.view==="cats"?dayName(t.date):(t.note?c.name:"");
   const conv2=t.cur!==main?`<span class="row-sub">${fmt(conv(t.amount,t.cur,main))} ${esc(main)}</span>`:"";
   return `<button class="row" data-tx="${esc(t.id)}" data-m="${esc(t.date.slice(0,7))}"><span class="emo" style="background:${tint(c.color)}">${esc(c.emoji)}</span>
-  <span class="row-main"><span class="row-title">${esc(t.note||c.name)}</span>${sub?`<span class="row-sub">${esc(sub)}</span>`:""}</span>
+  <span class="row-main"><span class="row-title">${esc(t.note||c.name)}${t.rule?'<span class="rep-mark" aria-label="Repeating">↻</span>':""}</span>${sub?`<span class="row-sub">${esc(sub)}</span>`:""}</span>
   <span class="row-amt">${fmt(t.amount)} ${esc(t.cur)}${conv2}</span></button>`;}
 document.getElementById("list").addEventListener("click",e=>{const tx=e.target.closest("[data-tx]");if(tx){const t=(S.months[tx.dataset.m]||{})[tx.dataset.tx];if(t)openEntry(t);return;}
   const c=e.target.closest("[data-cat]");if(c){S.open[c.dataset.cat]=!S.open[c.dataset.cat];render();}});
@@ -542,12 +572,14 @@ function renderAmount(){document.getElementById("exprTxt").textContent=E.expr||"
 const amountNow=()=>{const v=Math.round(evalExpr(E.expr)*100)/100;return isFinite(v)?v:0;};
 const expCats=()=>S.settings.categories.filter(c=>c.type!=="inc");
 function updateReady(){const ready=amountNow()>0;document.getElementById("catGrid").classList.toggle("wait",!ready&&!E.edit);
-  document.getElementById("hint").textContent=E.edit?"Tap a category to change it.":(ready?"Tap a category to save.":"Type the amount, then tap a category. That saves it.");}
+  const rep=document.getElementById("fRepeat").value;
+  document.getElementById("hint").textContent=E.edit?(E.edit.rule?"This one comes from a repeat. Changes here affect only this entry. Manage repeats in Settings.":"Tap a category to change it."):(ready?(rep!=="none"?`Tap a category to save. It will repeat ${FREQ[rep]}.`:"Tap a category to save."):"Type the amount, then tap a category. That saves it.");}
+document.getElementById("fRepeat").onchange=updateReady;
 function renderEntryCats(){
   document.getElementById("catGrid").innerHTML=expCats().map(c=>`<button class="cat" data-c="${esc(c.id)}" aria-pressed="${!!E.edit&&E.cat===c.id}"><span class="emo" style="background:${tint(c.color)}">${esc(c.emoji)}</span><span class="cat-name">${esc(c.name)}</span></button>`).join("");
   updateReady();}
 function recentCombos(){const cut=new Date(Date.now()-60*864e5).toISOString().slice(0,10);const m={};
-  Object.values(S.months).forEach(mo=>Object.values(mo).forEach(t=>{if(t.type!=="exp"||t.date<cut)return;const k=[t.cat,t.amount,t.cur,t.note||""].join("|");
+  Object.values(S.months).forEach(mo=>Object.values(mo).forEach(t=>{if(t.type!=="exp"||t.date<cut||t.rule)return;const k=[t.cat,t.amount,t.cur,t.note||""].join("|");
     const o=m[k]||(m[k]={cat:t.cat,amount:t.amount,cur:t.cur,note:t.note||"",n:0,ts:0});o.n++;o.ts=Math.max(o.ts,t.ts||0);}));
   return Object.values(m).filter(o=>expCats().some(c=>c.id===o.cat)).sort((a,b)=>b.n-a.n||b.ts-a.ts).slice(0,6);}
 let RECENTS=[];
@@ -557,6 +589,7 @@ function openEntry(tx){const st=S.settings;E.edit=tx||null;
   if(tx){E.expr=String(tx.amount);E.cur=tx.cur;E.cat=tx.cat;document.getElementById("fDate").value=tx.date;document.getElementById("fNote").value=tx.note||"";}
   else{E.expr="";E.cat=null;E.cur=st.lastCur&&st.rates[st.lastCur]?st.lastCur:(st.rates.CZK?"CZK":st.main);
     const t=todayStr();document.getElementById("fDate").value=t.slice(0,7)===S.month?t:`${S.month}-01`;document.getElementById("fNote").value="";}
+  document.getElementById("fRepeat").value="none";document.getElementById("repeatField").classList.toggle("hidden",!!tx);
   document.getElementById("entryTitle").textContent=tx?"Edit expense":"New expense";
   document.getElementById("delTx").classList.toggle("hidden",!tx);document.getElementById("saveTx").classList.toggle("hidden",!tx);
   renderRecents();renderEntryCats();renderAmount();openSheet("entry");}
@@ -568,6 +601,14 @@ document.getElementById("catGrid").addEventListener("click",e=>{const b=e.target
   E.cat=b.dataset.c;saveTx();});
 document.getElementById("recents").addEventListener("click",e=>{const b=e.target.closest("[data-again]");if(!b)return;const o=RECENTS[+b.dataset.again];if(!o)return;
   addTx({amount:o.amount,cur:o.cur,cat:o.cat,note:o.note,date:document.getElementById("fDate").value||todayStr()});});
+function addRule(f){const st=S.settings;const r={id:uid8(),freq:f.freq,start:f.date,day:Number(f.date.slice(8)),amount:f.amount,cur:f.cur,cat:f.cat,note:f.note||""};
+  st.recurring.push(r);if(st.lastCur!==f.cur)st.lastCur=f.cur;const n=runRecurring();saveSettings();
+  closeSheet("entry");if(n)S.month=f.date.slice(0,7)<=todayStr().slice(0,7)?todayStr().slice(0,7):S.month;render();
+  const label=f.note||catById(f.cat).name;
+  toast(n?`${label} repeats ${FREQ[f.freq]}. Added ${n} so far.`:`${label} repeats ${FREQ[f.freq]}, starting ${dayName(f.date)}.`,()=>{removeRule(r.id,true);});}
+function removeRule(id,withEntries){const st=S.settings;st.recurring=st.recurring.filter(r=>r.id!==id);
+  if(withEntries)Object.keys(S.months).forEach(k=>{const mo=S.months[k];Object.keys(mo).forEach(t=>{if(mo[t].rule===id)delete mo[t];});});
+  saveSettings();render();}
 function addTx(f){const tx={id:uid8(),type:"exp",amount:f.amount,cur:f.cur,acc:"main",cat:f.cat,date:f.date,note:f.note||"",ts:Date.now()};
   const key=tx.date.slice(0,7);(S.months[key]=S.months[key]||{})[tx.id]=tx;saveMonth(key);
   if(S.settings.lastCur!==tx.cur){S.settings.lastCur=tx.cur;saveSettings();}
@@ -577,7 +618,7 @@ function saveTx(){const v=amountNow();
   if(!(v>0)){toast("Enter an amount above zero.");return;}
   if(!E.cat){toast("Pick a category first.");return;}
   const date=document.getElementById("fDate").value||todayStr(),note=document.getElementById("fNote").value.trim();
-  if(!E.edit){addTx({amount:v,cur:E.cur,cat:E.cat,note,date});return;}
+  if(!E.edit){const freq=document.getElementById("fRepeat").value;if(freq!=="none"){addRule({amount:v,cur:E.cur,cat:E.cat,note,date,freq});return;}addTx({amount:v,cur:E.cur,cat:E.cat,note,date});return;}
   const tx={...E.edit,amount:v,cur:E.cur,cat:E.cat,date,note};
   const oldKey=E.edit.date.slice(0,7);if(oldKey!==date.slice(0,7)&&S.months[oldKey]){delete S.months[oldKey][tx.id];saveMonth(oldKey);}
   const key=date.slice(0,7);(S.months[key]=S.months[key]||{})[tx.id]=tx;saveMonth(key);
@@ -604,6 +645,12 @@ function renderSettings(){const st=S.settings,main=st.main;const curs=Object.key
     <div class="srow"><span style="flex:1">${st.autoRates===false?"Automatic updates are off":"Automatic updates are on"}</span><button class="chip" id="ratesNow">${st.autoRates===false?"Turn on and update":"Update now"}</button></div>`;
   curs.filter(c=>c!==main).forEach(c=>{h+=`<div class="srow"><label for="r-${c}">1 ${c} =</label><input class="in num" id="r-${c}" data-rate="${c}" inputmode="decimal" value="${+conv(1,c,main).toFixed(5)}"><span class="muted" style="width:40px">${main}</span>${c==="CZK"?'<span style="width:34px"></span>':`<button class="x-btn" data-delcur="${c}" aria-label="Remove ${c}">${xs}</button>`}</div>`;});
   h+=`<div class="srow"><input class="in code" id="newCur" maxlength="3" placeholder="Code" aria-label="New currency code"><input class="in num" id="newCurRate" inputmode="decimal" placeholder="Rate" aria-label="Rate in ${main}"><span class="muted" style="width:40px">${main}</span><button class="chip" id="addCur">Add</button></div></div>`;
+  h+=`<div class="sec">Repeating payments</div><p class="sec-note">${st.recurring.length?"Due payments are added on their date. Changing an amount affects future ones only. Stopping keeps past entries.":"Nothing repeats yet. When you add an expense, set Repeat to every month, week or year."}</p>`;
+  if(st.recurring.length){h+=`<div class="card">`;
+    st.recurring.slice().sort((a,b)=>(nextOcc(a,todayStr())||"").localeCompare(nextOcc(b,todayStr())||"")).forEach(r=>{const c=catById(r.cat);const nx=nextOcc(r,todayStr());
+      h+=`<div class="srow"><span class="emo" style="background:${tint(c.color)};width:32px;height:32px;font-size:17px">${esc(c.emoji)}</span><span style="flex:1;min-width:0"><span class="row-title" style="display:block">${esc(r.note||c.name)}</span><span class="row-sub" style="display:block">${esc(ruleWhen(r))}${nx?`, next ${esc(dayName(nx))}`:""}</span></span>
+      <input class="in num" style="width:84px" data-recamt="${esc(r.id)}" inputmode="decimal" value="${r.amount}" aria-label="Amount"><span class="muted" style="width:34px">${esc(r.cur)}</span><button class="x-btn" data-recstop="${esc(r.id)}" aria-label="Stop ${esc(r.note||c.name)}">${xs}</button></div>`;});
+    h+=`</div>`;}
   h+=`<div class="sec">Categories</div><p class="sec-note">This is the order they appear in when you add an expense. Use the arrow to move one up.</p><div class="card">`;
   expCats().forEach((c,i)=>{h+=`<div class="srow"><input class="in emoji" data-catemo="${esc(c.id)}" value="${esc(c.emoji)}" aria-label="Icon"><input class="in grow" data-catname="${esc(c.id)}" value="${esc(c.name)}" aria-label="Category name"><button class="swatch" data-catcol="${esc(c.id)}" style="background:${c.color}" aria-label="Change colour"></button>${i?`<button class="x-btn" data-catup="${esc(c.id)}" aria-label="Move ${esc(c.name)} up"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>`:'<span style="width:34px"></span>'}<button class="x-btn" data-delcat="${esc(c.id)}" aria-label="Remove ${esc(c.name)}">${xs}</button></div>`;});
   h+=`<button class="add-row" data-addcat="exp">Add category</button></div>`;
@@ -625,6 +672,8 @@ setBody.addEventListener("change",e=>{const t=e.target,st=S.settings,d=t.dataset
     if(d.rate==="CZK")st.rates[st.main]=1/v; // CZK is the internal base (always 1), so this sets the main currency's rate
     else st.rates[d.rate]=v*st.rates[st.main];
     st.ratesAsOf=todayStr()+" (edited)";st.autoRates=false;saveSettings();render();renderSettings();return;}
+  if(d.recamt){const r=S.settings.recurring.find(x=>x.id===d.recamt);const v=Math.round(parseFloat(t.value.replace(",","."))*100)/100;
+    if(!r)return;if(!(v>0)){toast("Amount must be above zero.");renderSettings();return;}r.amount=v;saveSettings();render();toast("Future payments updated");return;}
   if(d.accname){const a=st.accounts.find(x=>x.id===d.accname);if(a&&t.value.trim()){a.name=t.value.trim();saveSettings();render();}return;}
   if(d.acccur){const a=st.accounts.find(x=>x.id===d.acccur);if(a){a.cur=t.value;saveSettings();}return;}
   if(d.catname){const c=st.categories.find(x=>x.id===d.catname);if(c&&t.value.trim()){c.name=t.value.trim();saveSettings();render();}return;}
@@ -645,6 +694,8 @@ setBody.addEventListener("click",async e=>{const b=e.target.closest("button");if
   else if(d.catup){const arr=st.categories,i=arr.findIndex(x=>x.id===d.catup);if(i<0)return;
     let j=i-1;while(j>=0&&arr[j].type==="inc")j--;if(j<0)return;[arr[i],arr[j]]=[arr[j],arr[i]];saveSettings();renderSettings();
     const nb=setBody.querySelector(`[data-catup="${CSS.escape(d.catup)}"]`)||setBody.querySelector(`[data-catname="${CSS.escape(d.catup)}"]`);nb&&nb.focus();}
+  else if(d.recstop){const r=st.recurring.find(x=>x.id===d.recstop);if(!r)return;const idx=st.recurring.indexOf(r);removeRule(r.id,false);renderSettings();
+    toast(`Stopped ${r.note||catById(r.cat).name}`,()=>{st.recurring.splice(idx,0,r);runRecurring();saveSettings();renderSettings();render();});}
   else if(d.catcol){const c=st.categories.find(x=>x.id===d.catcol);if(!c)return;const i=PALETTE.indexOf(c.color);c.color=PALETTE[(i+1)%PALETTE.length];b.style.background=c.color;saveSettings();render();}
   else if(d.delcat){const c=st.categories.find(x=>x.id===d.delcat);if(!c)return;const idx=st.categories.indexOf(c);st.categories.splice(idx,1);saveSettings();renderSettings();render();
     toast(`Removed ${c.name}`,()=>{st.categories.splice(idx,0,c);saveSettings();renderSettings();render();});}
@@ -729,8 +780,10 @@ function toast(msg,undo){const el=document.getElementById("toast");el.innerHTML=
   if(undo)el.querySelector("button").onclick=()=>{undo();el.classList.remove("show");};clearTimeout(toastT);toastT=setTimeout(()=>el.classList.remove("show"),undo?5000:2600);}
 
 /* ---------- boot ---------- */
-lsLoad();render();updateSyncUi();refreshRates(false);
+lsLoad();runRecurring();render();updateSyncUi();refreshRates(false);
 (function waitGis(n){if(initGis()){if(driveOn()&&tokenOk())sync();return;}if(n<40)setTimeout(()=>waitGis(n+1),250);})(0);
+// Ask Chrome to keep Kasa's data even when the phone runs low on space (granted silently for installed apps).
+if(navigator.storage&&navigator.storage.persist)navigator.storage.persisted().then(p=>p||navigator.storage.persist()).catch(()=>{});
 if("serviceWorker" in navigator&&location.protocol==="https:")navigator.serviceWorker.register("sw.js").catch(()=>{});
 })();
 </script>
